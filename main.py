@@ -1,6 +1,6 @@
 import os
 import pymongo
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import nest_asyncio
 from bson import ObjectId
 import uvicorn
@@ -38,57 +38,90 @@ G.add_edges_from([("Zone A", "Zone B"), ("Zone B", "Zone C"), ("Zone C", "Zone A
 # ✅ API Endpoint: Add New Cargo
 @app.post("/add_cargo/")
 async def add_cargo(item: dict):
-    item["expiry_date"] = datetime.now() + timedelta(days=item["expiry_days"])
-    inserted_item = cargo_collection.insert_one(item)
-    return {"message": "Cargo added", "id": str(inserted_item.inserted_id)}
+    try:
+        item["expiry_date"] = datetime.now() + timedelta(days=item["expiry_days"])
+        inserted_item = cargo_collection.insert_one(item)
+        return {"message": "Cargo added", "id": str(inserted_item.inserted_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add cargo: {str(e)}")
 
 # ✅ API Endpoint: Get All Cargo Items
 @app.get("/get_cargo/")
 async def get_cargo():
-    items = []
-    for item in cargo_collection.find():
-        item["_id"] = str(item["_id"])
-        items.append(item)
-    return items
+    try:
+        items = []
+        for item in cargo_collection.find():
+            item["_id"] = str(item["_id"])
+            items.append(item)
+        return items
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve cargo data: {str(e)}")
 
-# ✅ API Endpoint: Delete Cargo Item
+# ✅ Fixed API Endpoint: Delete Cargo Item
 @app.delete("/delete_cargo/{item_id}")
 async def delete_cargo(item_id: str):
-    result = cargo_collection.delete_one({"_id": ObjectId(item_id)})
-    if result.deleted_count:
-        return {"message": "Cargo deleted"}
-    return {"error": "Item not found"}
+    try:
+        obj_id = ObjectId(item_id)  # Convert to ObjectId
+        item = cargo_collection.find_one({"_id": obj_id})  # Check if exists
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Cargo item not found in database")
+
+        result = cargo_collection.delete_one({"_id": obj_id})
+
+        if result.deleted_count == 1:
+            return {"message": "Cargo deleted successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to delete cargo item")
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid Cargo ID format: {str(e)}")
 
 # ✅ AI Endpoint: Suggest Smart Storage Placement
 @app.post("/smart_placement/")
 async def smart_placement(item: dict):
-    predicted_zone = storage_model.predict([[item["size"], item["priority"], item["expiry_days"]]])[0]
-    return {"suggested_storage_zone": predicted_zone}
+    try:
+        predicted_zone = storage_model.predict([[item["size"], item["priority"], item["expiry_days"]]])[0]
+        return {"suggested_storage_zone": predicted_zone}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to predict storage zone: {str(e)}")
 
 # ✅ AI Endpoint: Optimize Retrieval Path
 @app.get("/shortest_path/{start_zone}/{end_zone}")
 async def shortest_path(start_zone: str, end_zone: str):
-    path = nx.shortest_path(G, source=start_zone, target=end_zone)
-    return {"shortest_retrieval_path": path}
+    try:
+        if start_zone not in G.nodes or end_zone not in G.nodes:
+            raise HTTPException(status_code=400, detail="Invalid storage zones provided")
+        
+        path = nx.shortest_path(G, source=start_zone, target=end_zone)
+        return {"shortest_retrieval_path": path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compute shortest path: {str(e)}")
 
 # ✅ API Endpoint: Identify Waste Items (Expired Cargo)
 @app.get("/identify_waste/")
 async def identify_waste():
-    expired_items = []
-    for item in cargo_collection.find({"expiry_date": {"$lt": datetime.now()}}):
-        item["_id"] = str(item["_id"])
-        expired_items.append(item)
-    return expired_items
+    try:
+        expired_items = []
+        for item in cargo_collection.find({"expiry_date": {"$lt": datetime.now()}}):
+            item["_id"] = str(item["_id"])
+            expired_items.append(item)
+        return expired_items
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to identify waste items: {str(e)}")
 
 # ✅ API Endpoint: Predict Cargo Usage in Future Days
 @app.get("/simulate_usage/{days}")
 async def simulate_usage(days: int):
-    future_date = datetime.now() + timedelta(days=days)
-    expiring_items = []
-    for item in cargo_collection.find({"expiry_date": {"$lt": future_date}}):
-        item["_id"] = str(item["_id"])
-        expiring_items.append(item)
-    return {"expiring_items": expiring_items, "date_simulated": str(future_date)}
+    try:
+        future_date = datetime.now() + timedelta(days=days)
+        expiring_items = []
+        for item in cargo_collection.find({"expiry_date": {"$lt": future_date}}):
+            item["_id"] = str(item["_id"])
+            expiring_items.append(item)
+        return {"expiring_items": expiring_items, "date_simulated": str(future_date)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to simulate future cargo usage: {str(e)}")
 
 # ✅ Start FastAPI Server
 if __name__ == "__main__":
