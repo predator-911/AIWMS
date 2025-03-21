@@ -146,10 +146,13 @@ async def import_items(file_path: str):
 # 📌 **1️⃣3️⃣ Export Warehouse Arrangement**
 @app.get("/api/export/arrangement")
 async def export_arrangement():
+    """Exports warehouse data as a downloadable CSV file."""
     items = list(cargo_collection.find({}, {"_id": 0}))
     df = pd.DataFrame(items)
-    df.to_csv("warehouse_arrangement.csv", index=False)
-    return {"message": "Export successful", "file": "warehouse_arrangement.csv"}
+    file_path = "warehouse_arrangement.csv"
+    df.to_csv(file_path, index=False)
+    
+    return FileResponse(file_path, filename="warehouse_arrangement.csv", media_type="text/csv")
 
 # 📌 **1️⃣4️⃣ Logs API**
 @app.get("/api/logs")
