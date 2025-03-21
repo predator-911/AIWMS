@@ -7,3 +7,4 @@ networkx
 python-dotenv
 nest_asyncio
 pandas
+python-multipart
