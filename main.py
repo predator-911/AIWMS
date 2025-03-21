@@ -1,6 +1,7 @@
 import os
 import pymongo
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from bson import ObjectId
@@ -135,15 +136,15 @@ async def simulate_day():
         item["_id"] = str(item["_id"])
     return {"expiring_items": expiring_items}
 
-# 📌 **1️⃣2️⃣ Import Items via CSV**
+# 📌 **1️⃣2️⃣ Import Items via CSV (FIXED)**
 @app.post("/api/import/items")
-async def import_items(file_path: str):
-    df = pd.read_csv(file_path)
+async def import_items(file: UploadFile = File(...)):
+    df = pd.read_csv(file.file)
     records = df.to_dict(orient="records")
     cargo_collection.insert_many(records)
     return {"message": "Items imported successfully"}
 
-# 📌 **1️⃣3️⃣ Export Warehouse Arrangement**
+# 📌 **1️⃣3️⃣ Export Warehouse Arrangement (FIXED)**
 @app.get("/api/export/arrangement")
 async def export_arrangement():
     """Exports warehouse data as a downloadable CSV file."""
@@ -151,7 +152,7 @@ async def export_arrangement():
     df = pd.DataFrame(items)
     file_path = "warehouse_arrangement.csv"
     df.to_csv(file_path, index=False)
-    
+
     return FileResponse(file_path, filename="warehouse_arrangement.csv", media_type="text/csv")
 
 # 📌 **1️⃣4️⃣ Logs API**
