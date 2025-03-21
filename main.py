@@ -12,16 +12,6 @@ from pymongo import MongoClient
 import certifi
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ Enable CORS to allow frontend to communicate with backend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allow requests from any frontend (Change this to your frontend URL for security)
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
-    allow_headers=["*"],  # Allow all headers
-)
-
-
 # ✅ Get MongoDB credentials securely from Render Environment Variables
 MONGO_USERNAME = os.getenv("MONGO_USERNAME")
 MONGO_PASSWORD = os.getenv("MONGO_PASSWORD")
@@ -36,6 +26,17 @@ cargo_collection = db["cargo"]
 # ✅ Enable FastAPI inside Colab
 nest_asyncio.apply()
 app = FastAPI()
+
+
+# ✅ Enable CORS to allow frontend to communicate with backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow requests from any frontend (Change this to your frontend URL for security)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
+
 
 # 📌 AI Model for Smart Storage Placement
 X_train = np.array([[5, 90, 30], [10, 50, 60], [3, 20, 15]])  # (Size, Priority, Expiry)
