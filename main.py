@@ -10,6 +10,17 @@ from sklearn.tree import DecisionTreeClassifier
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 import certifi
+from fastapi.middleware.cors import CORSMiddleware
+
+# ✅ Enable CORS to allow frontend to communicate with backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow requests from any frontend (Change this to your frontend URL for security)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
+
 
 # ✅ Get MongoDB credentials securely from Render Environment Variables
 MONGO_USERNAME = os.getenv("MONGO_USERNAME")
