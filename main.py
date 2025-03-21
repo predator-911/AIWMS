@@ -1,7 +1,7 @@
 import os
 import pymongo
 from fastapi import FastAPI, HTTPException
-import nest_asyncio
+import pandas as pd
 from bson import ObjectId
 import uvicorn
 import networkx as nx
@@ -10,131 +10,104 @@ from sklearn.tree import DecisionTreeClassifier
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 import certifi
-from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ Get MongoDB credentials securely from Render Environment Variables
+# ✅ MongoDB Connection
 MONGO_USERNAME = os.getenv("MONGO_USERNAME")
 MONGO_PASSWORD = os.getenv("MONGO_PASSWORD")
 MONGO_DB = os.getenv("MONGO_DB")
 
-# ✅ Establish MongoDB Connection
 uri = f"mongodb+srv://{MONGO_USERNAME}:{MONGO_PASSWORD}@cluster0.38cb2.mongodb.net/{MONGO_DB}?retryWrites=true&w=majority"
 client = MongoClient(uri, tlsCAFile=certifi.where())
 db = client[MONGO_DB]
 cargo_collection = db["cargo"]
+log_collection = db["logs"]
 
-# ✅ Enable FastAPI inside Colab
-nest_asyncio.apply()
+# ✅ FastAPI App
 app = FastAPI()
 
-
-# ✅ Enable CORS to allow frontend to communicate with backend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allow requests from any frontend (Change this to your frontend URL for security)
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
-    allow_headers=["*"],  # Allow all headers
-)
-
-
-# 📌 AI Model for Smart Storage Placement
-X_train = np.array([[5, 90, 30], [10, 50, 60], [3, 20, 15]])  # (Size, Priority, Expiry)
-y_train = np.array(["Zone A", "Zone B", "Zone C"])  # Best Storage Zones
+# ✅ AI Model for Smart Storage
+X_train = np.array([[5, 90, 30], [10, 50, 60], [3, 20, 15]])
+y_train = np.array(["Zone A", "Zone B", "Zone C"])
 storage_model = DecisionTreeClassifier().fit(X_train, y_train)
 
-# 📌 AI Model for Shortest Retrieval Path
+# ✅ AI Model for Shortest Path
 G = nx.Graph()
 G.add_edges_from([("Zone A", "Zone B"), ("Zone B", "Zone C"), ("Zone C", "Zone A")])
 
-# ✅ API Endpoint: Add New Cargo
-@app.post("/add_cargo/")
-async def add_cargo(item: dict):
-    try:
-        item["expiry_date"] = datetime.now() + timedelta(days=item["expiry_days"])
-        inserted_item = cargo_collection.insert_one(item)
-        return {"message": "Cargo added", "id": str(inserted_item.inserted_id)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add cargo: {str(e)}")
+# 📌 **1️⃣ Placement Recommendation**
+@app.post("/api/placement")
+async def placement_recommendation(item: dict):
+    suggested_zone = storage_model.predict([[item["size"], item["priority"], item["expiry_days"]]])[0]
+    return {"suggested_zone": suggested_zone}
 
-# ✅ API Endpoint: Get All Cargo Items
-@app.get("/get_cargo/")
-async def get_cargo():
-    try:
-        items = []
-        for item in cargo_collection.find():
-            item["_id"] = str(item["_id"])
-            items.append(item)
-        return items
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve cargo data: {str(e)}")
+# 📌 **2️⃣ Item Search**
+@app.get("/api/search/{item_name}")
+async def search_item(item_name: str):
+    items = list(cargo_collection.find({"name": {"$regex": item_name, "$options": "i"}}))
+    if not items:
+        raise HTTPException(status_code=404, detail="Item not found")
+    for item in items:
+        item["_id"] = str(item["_id"])
+    return items
 
-# ✅ Fixed API Endpoint: Delete Cargo Item
-@app.delete("/delete_cargo/{item_id}")
-async def delete_cargo(item_id: str):
-    try:
-        obj_id = ObjectId(item_id)  # Convert to ObjectId
-        item = cargo_collection.find_one({"_id": obj_id})  # Check if exists
+# 📌 **3️⃣ Retrieve Item**
+@app.post("/api/retrieve")
+async def retrieve_item(item_id: str):
+    item = cargo_collection.find_one({"_id": ObjectId(item_id)})
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    cargo_collection.delete_one({"_id": ObjectId(item_id)})
+    log_collection.insert_one({"item_id": item_id, "action": "retrieved", "timestamp": datetime.utcnow()})
+    return {"message": "Item retrieved successfully"}
 
-        if not item:
-            raise HTTPException(status_code=404, detail="Cargo item not found in database")
+# 📌 **4️⃣ Suggest Rearrangement**
+@app.post("/api/rearrange")
+async def rearrange_storage():
+    items = list(cargo_collection.find().sort("priority", 1))
+    if not items:
+        raise HTTPException(status_code=404, detail="No items available for rearrangement")
+    return {"rearrange_suggestions": [item["name"] for item in items[:3]]}
 
-        result = cargo_collection.delete_one({"_id": obj_id})
-
-        if result.deleted_count == 1:
-            return {"message": "Cargo deleted successfully"}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to delete cargo item")
-
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid Cargo ID format: {str(e)}")
-
-# ✅ AI Endpoint: Suggest Smart Storage Placement
-@app.post("/smart_placement/")
-async def smart_placement(item: dict):
-    try:
-        predicted_zone = storage_model.predict([[item["size"], item["priority"], item["expiry_days"]]])[0]
-        return {"suggested_storage_zone": predicted_zone}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to predict storage zone: {str(e)}")
-
-# ✅ AI Endpoint: Optimize Retrieval Path
-@app.get("/shortest_path/{start_zone}/{end_zone}")
-async def shortest_path(start_zone: str, end_zone: str):
-    try:
-        if start_zone not in G.nodes or end_zone not in G.nodes:
-            raise HTTPException(status_code=400, detail="Invalid storage zones provided")
-        
-        path = nx.shortest_path(G, source=start_zone, target=end_zone)
-        return {"shortest_retrieval_path": path}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to compute shortest path: {str(e)}")
-
-# ✅ API Endpoint: Identify Waste Items (Expired Cargo)
-@app.get("/identify_waste/")
+# 📌 **5️⃣ Identify Waste Items**
+@app.get("/api/waste/identify")
 async def identify_waste():
-    try:
-        expired_items = []
-        for item in cargo_collection.find({"expiry_date": {"$lt": datetime.now()}}):
-            item["_id"] = str(item["_id"])
-            expired_items.append(item)
-        return expired_items
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to identify waste items: {str(e)}")
+    expired_items = list(cargo_collection.find({"expiry_date": {"$lt": datetime.now()}}))
+    for item in expired_items:
+        item["_id"] = str(item["_id"])
+    return expired_items
 
-# ✅ API Endpoint: Predict Cargo Usage in Future Days
-@app.get("/simulate_usage/{days}")
-async def simulate_usage(days: int):
-    try:
-        future_date = datetime.now() + timedelta(days=days)
-        expiring_items = []
-        for item in cargo_collection.find({"expiry_date": {"$lt": future_date}}):
-            item["_id"] = str(item["_id"])
-            expiring_items.append(item)
-        return {"expiring_items": expiring_items, "date_simulated": str(future_date)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to simulate future cargo usage: {str(e)}")
+# 📌 **6️⃣ Time Simulation**
+@app.post("/api/simulate/day")
+async def simulate_day():
+    expiring_items = list(cargo_collection.find({"expiry_date": {"$lt": datetime.now() + timedelta(days=1)}}))
+    for item in expiring_items:
+        item["_id"] = str(item["_id"])
+    return {"expiring_items": expiring_items}
 
-# ✅ Start FastAPI Server
+# 📌 **7️⃣ Import Items via CSV**
+@app.post("/api/import/items")
+async def import_items(file_path: str):
+    df = pd.read_csv(file_path)
+    records = df.to_dict(orient="records")
+    cargo_collection.insert_many(records)
+    return {"message": "Items imported successfully"}
+
+# 📌 **8️⃣ Export Warehouse Arrangement**
+@app.get("/api/export/arrangement")
+async def export_arrangement():
+    items = list(cargo_collection.find({}, {"_id": 0}))
+    df = pd.DataFrame(items)
+    df.to_csv("warehouse_arrangement.csv", index=False)
+    return {"message": "Export successful", "file": "warehouse_arrangement.csv"}
+
+# 📌 **9️⃣ Logs API**
+@app.get("/api/logs")
+async def get_logs():
+    logs = list(log_collection.find())
+    for log in logs:
+        log["_id"] = str(log["_id"])
+    return logs
+
+# ✅ **Start FastAPI**
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
