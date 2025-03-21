@@ -6,3 +6,4 @@ scikit-learn
 networkx
 python-dotenv
 nest_asyncio
+pandas
