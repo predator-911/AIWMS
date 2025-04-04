@@ -98,16 +98,116 @@ async def delete_cargo(item_id: str):
     return {"error": "Item not found"}
 
 # 📌 **6️⃣ Waste Management**
+class ReturnPlanRequest(BaseModel):
+    undockingContainerId: str
+    undockingDate: str  # ISO format
+    maxWeight: float
+
 @app.post("/api/waste/return-plan")
-async def return_plan():
-    expired_items = list(cargo_collection.find({"expiry_date": {"$lt": datetime.now()}}))
-    return {"plan": [{"itemId": item["_id"], "name": item["name"], "reason": "Expired"} for item in expired_items]}
+async def generate_return_plan(request: ReturnPlanRequest):
+    # Mark expired and depleted items as waste
+    current_time = datetime.fromisoformat(get_current_time())
+    expired_items = list(items_col.find({
+        "expiryDate": {"$lt": current_time},
+        "isWaste": False
+    }))
+    depleted_items = list(items_col.find({
+        "usageCount": {"$gte": "$usageLimit"},
+        "isWaste": False
+    }))
+
+    # Update waste status
+    for item in expired_items + depleted_items:
+        items_col.update_one(
+            {"_id": item["_id"]},
+            {"$set": {
+                "isWaste": True,
+                "wasteReason": "Expired" if "expiryDate" in item else "Depleted"
+            }}
+        )
+
+    # Fetch all waste items
+    waste_items = list(items_col.find({"isWaste": True}))
+    
+    # Optimize for maxWeight using knapsack algorithm
+    selected_items = []
+    total_weight = 0.0
+    for item in sorted(waste_items, key=lambda x: -x["mass"]):
+        if total_weight + item["mass"] <= request.maxWeight:
+            selected_items.append(item)
+            total_weight += item["mass"]
+
+    # Generate return steps
+    steps = []
+    for idx, item in enumerate(selected_items, 1):
+        steps.append({
+            "step": idx,
+            "action": "move",
+            "itemId": item["itemId"],
+            "fromContainer": item["containerId"],
+            "toContainer": request.undockingContainerId,
+            "position": item["position"]
+        })
+
+    return {
+        "success": True,
+        "totalWeight": total_weight,
+        "totalVolume": sum(item_volume(item) for item in selected_items),
+        "steps": steps
+    }
 
 # 📌 **7️⃣ Time Simulation**
+class SimulationRequest(BaseModel):
+    numOfDays: int
+    itemsToBeUsedPerDay: List[Dict[str, int]]  # [{itemId: "001", uses: 2}, ...]
+
 @app.post("/api/simulate/day")
-async def simulate_day():
-    expiring_items = list(cargo_collection.find({"expiry_date": {"$lt": datetime.now() + timedelta(days=1)}}))
-    return {"dateSimulated": str(datetime.now() + timedelta(days=1)), "expiring_items": expiring_items}
+async def simulate_time(request: SimulationRequest):
+    current_time = datetime.fromisoformat(get_current_time())
+    new_time = current_time + timedelta(days=request.numOfDays)
+    
+    expired_today = []
+    depleted_today = []
+    
+    # Advance day-by-day to track granular changes
+    for day in range(request.numOfDays):
+        # Update system time
+        current_time += timedelta(days=1)
+        set_current_time(current_time.isoformat())
+        
+        # Mark expired items
+        expired = list(items_col.find({
+            "expiryDate": {"$lt": current_time},
+            "isWaste": False
+        }))
+        expired_today.extend(expired)
+        
+        # Process daily usages
+        if day < len(request.itemsToBeUsedPerDay):
+            for usage in request.itemsToBeUsedPerDay[day]:
+                item = items_col.find_one({"itemId": usage["itemId"]})
+                if item:
+                    new_usage = item.get("usageCount", 0) + usage["uses"]
+                    items_col.update_one(
+                        {"_id": item["_id"]},
+                        {"$set": {"usageCount": new_usage}}
+                    )
+                    if item["usageLimit"] and new_usage >= item["usageLimit"]:
+                        depleted_today.append(item)
+    
+    # Mark depleted items
+    for item in depleted_today:
+        items_col.update_one(
+            {"_id": item["_id"]},
+            {"$set": {"isWaste": True, "wasteReason": "Depleted"}}
+        )
+    
+    return {
+        "success": True,
+        "newDate": current_time.isoformat(),
+        "expiredToday": [{"itemId": x["itemId"]} for x in expired_today],
+        "depletedToday": [{"itemId": x["itemId"]} for x in depleted_today]
+    }
 
 # 📌 **8️⃣ Import & Export Warehouse Data**
 @app.post("/api/import/items")
