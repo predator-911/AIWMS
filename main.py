@@ -44,7 +44,10 @@ class ReturnPlanRequest(BaseModel):
 class ItemUsage(BaseModel):
     itemId: str
     uses: int = 1
-
+class ReturnPlanRequest(BaseModel):
+    undockingContainerId: str  # Ensure this is required
+    undockingDate: datetime
+    maxWeight: float
 # Fixed SimulationRequest to support both formats
 class SimulationRequest(BaseModel):
     # Accept either numOfDays or days
