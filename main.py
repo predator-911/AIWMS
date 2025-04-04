@@ -3,8 +3,8 @@ import pymongo
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Dict
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional, Union
 import pandas as pd
 from bson import ObjectId
 import uvicorn
@@ -41,9 +41,20 @@ class ReturnPlanRequest(BaseModel):
     undockingDate: str  # ISO format
     maxWeight: float
 
+class ItemUsage(BaseModel):
+    itemId: str
+    uses: int = 1
+
+# Fixed SimulationRequest to support both formats
 class SimulationRequest(BaseModel):
-    numOfDays: int
-    itemsToBeUsedPerDay: List[Dict[str, int]]  # [{itemId: "001", uses: 2}, ...]
+    # Accept either numOfDays or days
+    numOfDays: Optional[int] = None
+    days: Optional[int] = None
+    itemsToBeUsedPerDay: Optional[List[Dict[str, int]]] = []
+    
+    # Validate that either numOfDays or days is provided
+    def get_days(self) -> int:
+        return self.numOfDays if self.numOfDays is not None else self.days
 
 # ✅ FastAPI App
 app = FastAPI(title="Warehouse Management System API")
@@ -269,22 +280,34 @@ async def generate_return_plan(request: ReturnPlanRequest):
         "steps": steps
     }
 
-# 📌 **7️⃣ Time Simulation**
+# 📌 **7️⃣ Time Simulation - FIXED TO ACCEPT BOTH REQUEST FORMATS**
 @app.post("/api/simulate/day")
-async def simulate_time(request: SimulationRequest):
+async def simulate_time(request: dict):
+    """
+    Simulate the passage of time.
+    Accepts either {"days": N} or {"numOfDays": N, "itemsToBeUsedPerDay": [...]} format.
+    """
+    # Handle different request formats
+    num_days = request.get("numOfDays", request.get("days", 0))
+    items_to_use = request.get("itemsToBeUsedPerDay", [])
+    
+    # Validate input
+    if num_days <= 0:
+        raise HTTPException(status_code=400, detail="Number of days must be positive")
+    
     try:
         current_time = datetime.fromisoformat(get_current_time())
     except ValueError:
         current_time = datetime.now()
         set_current_time(current_time.isoformat())
     
-    new_time = current_time + timedelta(days=request.numOfDays)
+    new_time = current_time + timedelta(days=num_days)
     
     expired_today = []
     depleted_today = []
     
     # Advance day-by-day to track granular changes
-    for day in range(request.numOfDays):
+    for day in range(num_days):
         # Update system time
         current_time += timedelta(days=1)
         set_current_time(current_time.isoformat())
@@ -297,8 +320,8 @@ async def simulate_time(request: SimulationRequest):
         expired_today.extend(expired)
         
         # Process daily usages
-        if day < len(request.itemsToBeUsedPerDay):
-            for usage in request.itemsToBeUsedPerDay[day]:
+        if day < len(items_to_use):
+            for usage in items_to_use[day]:
                 item = items_col.find_one({"itemId": usage["itemId"]})
                 if item:
                     new_usage = item.get("usageCount", 0) + usage.get("uses", 0)
@@ -326,7 +349,7 @@ async def simulate_time(request: SimulationRequest):
     # Log the simulation
     log_collection.insert_one({
         "action": "time_simulation",
-        "days_simulated": request.numOfDays,
+        "days_simulated": num_days,
         "expired_items": len(expired_today),
         "depleted_items": len(depleted_today),
         "timestamp": datetime.now()
@@ -338,6 +361,12 @@ async def simulate_time(request: SimulationRequest):
         "expiredToday": [{"itemId": x.get("itemId", str(x["_id"]))} for x in expired_today],
         "depletedToday": [{"itemId": x.get("itemId", str(x["_id"]))} for x in depleted_today]
     }
+
+# Alternative endpoint that accepts raw JSON
+@app.post("/api/simulate")
+async def simulate_time_flexible(request: dict):
+    """A more flexible endpoint that accepts various request formats."""
+    return await simulate_time(request)
 
 # 📌 **8️⃣ Import & Export Warehouse Data**
 @app.post("/api/import/items")
